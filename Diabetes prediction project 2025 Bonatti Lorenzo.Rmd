@@ -1,0 +1,855 @@
+---
+title: "SL Project"
+author: "Chiara Mensini, Lorenzo Bonatti, Sara Cassiani"
+date: "2024-03-16"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    df_print: paged
+editor_options:
+  markdown:
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+set.seed(1) 
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries 
+library(dplyr)
+library(corrplot)
+library(e1071)
+library(caret)
+library(ggplot2)
+library(pROC)
+library(ROCR)
+library(tree)
+library(randomForest)
+library(gbm)
+library(knitr)
+library(tidyr)
+```
+
+# 1. Descriptive Analysis
+
+## 1.1 The dataset
+
+The dataset ([link](https://www.kaggle.com/datasets/iammustafatz/diabetes-prediction-dataset/data)) is a collection of medical and demographic data from patients, along with their diabetes status (positive or negative).
+Understanding and analyzing diabetes occurrences can be useful for healthcare professionals in identifying patients who may be at risk of developing diabetes and in developing personalized treatment plans.
+Additionally, the dataset can be used by researchers to explore the relationships between various medical and demographic factors and the likelihood of developing diabetes.
+
+The dataset consists of 100000 observations and 9 variables:
+
+-   `diabetes` : binary variable, with values of 1 indicating the presence of diabetes in the individual and 0 indicating the absence
+
+-   `gender` : numerical variable referring to the biological sex of the individual, which can have an impact on their susceptibility to diabetes
+
+-   `age` : numerical variable referring to the age of the individual.
+    It ranges between $[0,80]$.
+    Diabetes is more commonly diagnosed in older adults
+
+-   `hypertension` : binary variable, with values of 1 indicating the presence of hypertension in the individual and 0 the absence.
+    Hypertension is a medical condition in which the blood pressure in the arteries is persistently elevated
+
+-   `heart_disease` : binary variable, with values of 1 indicating the presence of a heart disease in the individual and 0 the absence.
+    Heart disease is another medical condition that is associated with an increased risk of developing diabetes
+
+-   `smoking_history` : categorical variable, with 5 categories: never, not current, former, current and ever.
+    Smoking history is also considered a risk factor for diabetes and it can exacerbate the complicaions associated with diabetes
+
+-   `bmi` : numerical variable referring to the Body Mass Index of the individual.
+    Higher BMI are linked to a higher risk of diabetes.
+    It ranges between $[10.16, 71.55]$
+
+$$
+\begin{cases}
+    underweight & \text{if }\ bmi < 18.5 \\
+    normal & \text{if }\ 18.5 \leq bmi< 25 \\
+    overweight & \text{if }\ 25 \leq bmi < 30 \\
+    obese & \text{if }\ bmi \geq 30
+\end{cases}
+$$
+
+-   `HbA1c_level` : numerical variable referring to the Hemoglobin A1c level of the individual.
+    It is a measure of the average blood sugar level over the last 2-3 months.
+    Mainly, an HbA1c level above 6.5% indicates diabetes.
+
+-   `blood_glucose_level` : numerical variable referring to the amount of glucose in the bloodstream of the individual at a given time.
+    High blood glucose levels are a key indicator of diabetes.
+
+```{r include=FALSE}
+data = read.csv("C:/Users/loren/Downloads/diabetes_prediction_dataset.csv")
+```
+
+## 1.2 Goal of the project
+
+Diabetes is a chronic metabolic disorder characterized by elevated blood sugar levels, which can lead to serious health complications if not managed effectively.
+Early detection and classification of diabetic patients are crucial for timely intervention and personalized treatment strategies.
+In this project, our goal is to develop a classification model to distinguish between diabetic and non-diabetic patients using various statistical methods.
+By analyzing a comprehensive dataset containing clinical and demographic information of patients, we aim to identify key predictors and patterns associated with diabetes.
+Through rigorous statistical analysis and model validation, the goal is to build a reliable predictive model capable of accurately classifying patients into diabetic and non-diabetic categories.
+This research has the potential to enhance diagnostic accuracy, improve patient outcomes, and contribute to the development of targeted interventions for individuals at risk of diabetes.
+
+# 2. Data preparation
+
+## 2.1 Check for NA
+
+The dataset underwent an examination to identify and address any missing values, with the aim of ensuring data completeness.
+While no missing values were detected, instances of *No Info* entries were found within the `smoking_history` variable.
+Consequently, these entries were removed from the dataset to uphold data quality standards.
+As a result of this filtering process, the dataset was reduced to 64184 observations.
+
+```{r}
+print(nrow(data))
+data=na.omit(data)
+print(nrow(data))
+data = filter(data, smoking_history != "No Info")
+print(nrow(data))
+```
+
+## 2.2 Dataset reduction
+
+Following the filtering process, a subset of 5000 observations was randomly selected to enhance computational efficiency.
+Therefore, the analysis will focus on this subset of 5000 observations.
+
+```{r}
+index <- sample(nrow(data), 5000, replace = FALSE)
+data <- data[index, ]
+```
+
+## 2.3 Categorical variables
+
+In this section, it will be addressed the treatment of categorical variables within the dataset.
+Many machine learning algorithms, including SVM and logistic regression, require numerical input data.
+Consequently, categorical variables must be appropriately transformed into numerical representations.
+
+To accomplish this, the chosen method involves mapping each category within a categorical variable to a unique numerical value.
+This process is applied to the `gender` and `smoking_history` variables as follows.
+
+For the `gender` variable, the categories *Male* and *Female* are converted to binary values, with *Male* represented as 1 and *Female* as 0.
+
+```{r}
+data$gender = ifelse(data$gender == "Male", 1, 0)
+```
+
+Similarly, each category of the `smoking_history` variable (*never*, *not current*, *former*, *current* and *ever*) is mapped to a numerical value ranging from 0 to 4, enabling the representation of different smoking statuses in a quantitative format.
+
+```{r}
+data$smoking_history <- ifelse(data$smoking_history == "never", 0,
+                               ifelse(data$smoking_history == "not current", 1,
+                                      ifelse(data$smoking_history == "former", 2,
+                                             ifelse(data$smoking_history == "current", 3, 4))))
+```
+
+# 3. Plots
+
+The distribution of diabetes cases within the subset of the dataset is visually depicted.
+The primary objective is to illustrate the balance between individuals diagnosed with diabetes and those without the condition.
+
+```{r, fig.cap="Count of diabetes occurences", fig.width=4.5, fig.height=3.5}
+count <- table(data$diabetes)
+
+barplot(count, xlab = "Diabetes", ylab = "Count", ylim=c(0, 5900), 
+        col=c("lightsteelblue3", "rosybrown3"))
+
+text(x = c(1, 2), y = count, labels = count, pos = 3, cex = 0.8, col = "black")
+```
+
+From the previous plot it is possible to visualize the updated frequency distribution of `diabetes` which indicates that within the subset of individuals there are 517 cases of diabetes and 4483 cases of non-diabetes, highlighting a significant imbalance in the final dataset.
+
+The correlation matrix provides a comprehensive overview of the relationships between variables in the dataset.
+From the following plot it can be seen that there is a positive linear relationship between the response variable `diabetes` and the predictors `blood_glucose_level` and `HbA1c_level`.
+Additionally, there seems to be a positive (but quite weak) linear relationship between `age` and all the other variables (except for, of course, `gender`).
+
+```{r fig.cap="Correlation Matrix", fig.height=3.5, fig.width=4}
+corr_matrix = cor(data)
+corrplot(corr_matrix, method="circle")
+```
+
+# 4. Logistic regression
+
+Logistic regression, a commonly used statistical method for classification tasks, is particularly effective for analyzing binary outcomes, such as the presence or absence of diabetes in individuals.
+This approach employs a parametric model known as the *logit function* to estimate the probability of the occurrence of an event given certain input variables.
+In this context, the input variables include `gender`, `age`, `hypertension`, `heart_disease`, `smoking_history`, `bmi`, `HbA1c_level` and `blood_glucose_level`, denoted as $X$, while the binary outcome variable, denoted as $Y$, is `diabetes`.
+By directly modeling the estimated probability $P(Y|X)$, logistic regression provides insights into the relationship between these input variables and the binary outcome.
+
+The dataset is split into training set and test set for model comparison.
+
+```{r}
+# Creation of the train and test sets
+data$diabetes=as.factor(data$diabetes)
+n=nrow(data)
+select.test = sample(1:n,n/10)
+
+train = as.data.frame(data[-select.test,])
+test = as.data.frame(data[select.test,])
+```
+
+Beginning with a logistic regression based on a linear model.
+
+```{r}
+logit = glm(diabetes~.,data=train,family='binomial')
+summary(logit)
+```
+
+The logistic regression analysis reveals that several predictors significantly contribute to explaining the response variable.
+Specifically, the intercept , `age`, `HbA1c_level`, `bmi` and `blood_glucose_level` exhibit very small p-value.
+This result is coherent with established medical knowledge, where diabetes commonly occurs in older individuals with higher BMI and elevated blood glucose levels.
+Therefore, the findings are currently confirming what is known in the scientific literature.
+
+**Coefficients Interpretation**
+
+-   The coefficient estimate for `age` is approximately 0.048523 with a standard error of 0.005099.
+    This suggests that for each one-unit increase in age, the log odds of having diabetes increase by approximately 0.048523, holding all other variables constant which is perfectly logic.
+
+-   The coefficient estimate for `blood_glucose_level` is approximately 0.035808 with a standard error of 0.002170.
+    This indicates that for each one-unit increase in blood glucose level, the log odds of having diabetes increase by approximately 0.035808, holding all other variables constant.
+
+## 4.1 Logistic Predictions
+
+It is now performed prediction according to the logit model.
+
+```{r}
+yhat.logit = predict(logit,newdata=test,type='response')
+prediction.logit = factor(ifelse(yhat.logit>0.5,1,0))
+```
+
+The confusion matrix provides a snapshot of the performance of the logit model.
+
+```{r}
+cf_log = confusionMatrix(data=prediction.logit,test$diabetes)
+cf_log
+```
+
+The model achieves an accuracy of 94.2%, indicating proficiency in classifying the absence/presence of diabetes in individuals.
+The proportion of actual non-diabetes cases that were correctly identified is around 97.6%.
+Additionally, the proportion of actual diabetes cases that were correctly identified is around 62.5%.
+This suggests the model performs well in accurately classifying non-diabetes cases, but there could be potential for enhancement in detecting diabetes cases.
+
+It is now created a heatmap in order to visualize and better understand the previous results.
+
+```{r fig.cap="Heatmap of Predicted Values vs Actual Values - Logit Model", fig.height=3.5, fig.width=4}
+cflog_df <- as.data.frame(as.table(cf_log))
+colnames(cflog_df) <- c("Predicted", "Reference", "Count")
+
+# Sum for the actual labels
+sums <- tapply(cflog_df$Count, cflog_df$Reference, sum)
+
+# Percentages
+cflog_df$Percentage <- cflog_df$Count / sums[cflog_df$Reference] * 100
+
+ggplot(cflog_df, aes(x = Reference, y = Predicted, fill = Percentage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), size = 3) +
+  scale_fill_gradient(low = "white", high = "pink") +
+  theme_minimal() +
+  labs(x = "Actual", y = "Predicted", title = "Normalized Confusion Matrix")
+
+```
+
+Overall, the model demonstrates better accuracy in identifying non-diabetes cases than diabetes cases.
+However, it is important to note that the model misclassified 11 individuals without diabetes as diabetic, which could pose challenges in clinical contexts where false diagnoses carry significant consequences, even though it is a small percentage.
+
+# 5. SVM
+
+Support Vector Machines (SVM) is an approach for binary classification.
+SVM aims to find the optimal hyperplane that separates the two classes within the feature space while maximizing the margin.
+The margin refers to the distance between the hyperplane and the closest data points from each class, known as support vectors.
+By maximizing the margin, SVMs not only aim for accurate predictions on the training data but also for robust generalization to unseen data.
+In this case SVM accomodates non-linear decision boundaries through the use of the radial kernel function.
+Note that SVM exclusively operates with numerical variables.
+Consequently, the number of variables considered will be reduced compared to the original dataset.
+Additionally, it can be very sensible to different scale of measurements.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# The categorical variable gender, hypertension, heart_disease and smoking history will not be considered
+var.remove = c(1,3,4,5) 
+data.quant = data[-var.remove]
+
+# Standardization of the data (without considering the binary response variable)
+columns_to_scale <- setdiff(names(data.quant), "diabetes")
+
+data.scaled <- as.data.frame(scale(data.quant[, columns_to_scale]))
+
+apply(data.scaled,2,sd)
+apply(data.scaled,2,mean)
+
+data.scaled <- cbind(data.scaled, diabetes=data.quant$diabetes)
+
+# Response variable transformed into factor
+data.scaled$diabetes=as.factor(data.scaled$diabetes)
+```
+
+```{r}
+# Creation of the train and test sets
+n=nrow(data)
+select.test = sample(1:n,n/10)
+
+train_quant = as.data.frame(data.scaled [-select.test,])
+test_quant = as.data.frame(data.scaled [select.test,])
+```
+
+## 5.1 Tuning
+
+It is now performed hyperparameter tuning for SVM using radial kernel to predict diabetes based on various features.
+The tuning process employed 10-fold cross-validation and it is essential for optimizing the performance of SVM by selecting the best combination of parameters *cost* and *gamma*.
+*cost* and *gamma* are used to control the trade-off between model complexity and the ability to fit the training data.
+
+-   *cost* represents the penalty parameter for misclassification errors in the SVM model.
+    Higher the cost parameter, greater the penalty for misclassifying training examples, leading to a decision boundary that closely follows the training data.
+    Consequently, the decision boundary will have a smaller margin, as it attemps to separate classes with high precision
+
+-   *gamma* is the parameter that influences the flexibility of the SVM model.
+    A higher value of *gamma* indicates a narrower influence radius for each training example, meaning that the SVM model will be more influenced only by data points close to the separation hyperplane.
+
+```{r}
+tune.out=tune(svm,diabetes~.,data=train_quant,kernel="radial",
+              ranges=list(cost=c(0.001, 0.01, 0.1, 1,5,10,100),gamma=c(0.5,1,2,3,4) ))
+
+summary(tune.out)
+```
+
+The best parameters found were a cost value of 10 and a gamma value of 1.
+These parameters correspond to the point of minimum error during cross-validation.
+
+Therefore, the best-tuned SVM model for diabetes prediction is the one trained using a radial kernel with cost set to 10 and gamma set to 0.5.
+
+```{r}
+bestmod.SVM=tune.out$best.model
+summary(bestmod.SVM)
+```
+
+## 5.2 SVM Predictions
+
+It is now performed prediction according to the best tuned svm model.
+
+```{r}
+prediction.SVM = predict(bestmod.SVM,newdata=test_quant)
+```
+
+The confusion matrix provides a snapshot of the performance of the SVM model.
+
+```{r}
+confusion_matrix_SVM = confusionMatrix(data=prediction.SVM,test_quant$diabetes)
+print(confusion_matrix_SVM)
+```
+
+The model achieves an accuracy of 96.6%, indicating proficiency in classifying the absence/presence of diabetes in individuals.
+The proportion of actual non-diabetes cases that were correctly identified is 99.3%.
+However, the proportion of actual diabetes cases that were correctly identified is lower, around 70.2%.
+
+It is now created a heatmap in order to visualize and better understand the previous results.
+
+```{r, fig.cap="Heatmap of Predicted Values vs Actual Values - SVM", fig.width=4.5, fig.height=3.5}
+cfSVM_df <- as.data.frame(as.table(confusion_matrix_SVM))
+colnames(cfSVM_df) <- c("Predicted", "Reference", "Count")
+
+# Sum for the actual labels
+sums <- tapply(cfSVM_df$Count, cfSVM_df$Reference, sum)
+
+# Percentages
+cfSVM_df$Percentage <- cfSVM_df$Count / sums[cfSVM_df$Reference] * 100
+
+ggplot(cfSVM_df, aes(x = Reference, y = Predicted, fill = Percentage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), size = 3) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  theme_minimal() +
+  labs(x = "Actual", y = "Predicted", title = "Normalized Confusion Matrix")
+
+```
+
+Overall, the model exhibits higher accuracy in correctly predicting non-diabetes cases compared to diabetes cases.
+Indeed, 70.2% of the diabetes cases were correctly predicted, considering the fact that the dataset is unbalanced, it is a quite high result.
+It is important to note that the model misclassified 3 individuals without diabetes as diabetic, which could pose challenges in clinical contexts where false diagnoses carry significant consequences, even though it is a small percentage.
+
+# 6. KNN
+
+The K-Nearest Neighbors (KNN) is an approach for classification and regression.
+It is a non-parametric method that makes predictions based on the data included in neighborhoods of each point.
+The idea behind is that similar data points tend to have similar labels or outcomes.
+It relies on the fact that there exits a distance between covariates (Euclidean is often used).
+It is a classification method based on estimating the distribution of $Y|X$ and using the estimated probability to classify data.
+
+$$
+\hat{P}[Y=c_j | X=x_i] = \frac{1}{K} \sum_{i \in N_i^K} I(y_i=c_j)
+$$
+
+where:
+
+-   $\hat{P}[Y=c_j | X=x_i]$ is the posterior probability of class $j$
+
+-   $N_i$ is the neighborhood of $x_i$: $K$ points closest to $x_i$ (with respect to a distance $d$)
+
+Note that KNN exclusively operates with numerical variables.
+Consequently, the number of variables considered will be reduced compared to the original dataset.
+Additionally, it can be very sensible to different scale of measurements.
+This preprocessing step aligns with the approach used for SVM.
+Consequently, the dataset used for KNN will remain unchanged.
+
+## 6.1 Cross-Validation
+
+The initial steps involve conducting a 10-fold cross-validation technique to identify the index (number of neighbors $k$) associated with the lowest cross-validation error.
+
+```{r, fig.cap="Cross Validation Error vs. Number of Neighbors", fig.width=4.5, fig.height=3.5}
+# The number of neighbors to consider is 30
+k.explore = 1:30
+
+# Cross-validation on training set for choosing k
+nfolds = 10 # Number of folds for cross-validation
+folds = sample(1:nfolds,dim(train_quant)[1],replace = TRUE)
+CVerror = matrix(ncol=length(k.explore),nrow=nfolds)
+
+# 10-fold cross-validation to choose the optimal value of k
+for(j in 1:nfolds){
+  for(k in k.explore){
+    prediction.KNN = class::knn(train_quant[which(folds!=j),1:4],train_quant[which(folds==j),1:4],cl=train_quant[which(folds!=j),5],k=k) 
+    CVerror[j,k] = mean(prediction.KNN != train_quant[which(folds==j),5])
+  }
+}
+
+
+plot(colMeans(CVerror),type='b',lwd=3, ylab = "Cross Validation Errors")
+abline(v = which.min(colMeans(CVerror)), col = "red", lwd = 2)
+
+```
+
+The result of the plot indicates that the optimal number of neighbors selected through cross-validation is 11.
+Multiple iterations were conducted to ensure the stability of the outcome.
+
+## 6.2 KNN Predictions
+
+The final step involves using the KNN method to predict values and then comparing them to the true values using a confusion matrix.
+
+```{r}
+# k = 11
+
+min_index=which.min(colMeans(CVerror))
+
+prediction.KNN = class::knn(train_quant[,1:4],test_quant[,1:4],cl=train_quant[,5],k=min_index) 
+cf_KNN=confusionMatrix(data=prediction.KNN,test_quant$diabetes)
+print(cf_KNN)
+```
+
+The model achieves an accuracy of 96%, indicating proficiency in classifying the absence/presence of diabetes in individuals.
+The proportion of actual non-diabetes cases that were correctly identified is almost 99.3%.
+However, the proportion of actual diabetes cases that were correctly identified is lower, 30 correctly classified cases out of 47 total cases of diabetes.
+This suggests that while the model performs well in identifying non-diabetes cases, it may benefit from further optimization to better capture diabetes cases.
+
+It is now created a heatmap in order to visualize and better understand the previous results.
+
+```{r,fig.cap="Heatmap of Predicted Values vs Actual Values - KNN", fig.width=4.5, fig.height=3.5}
+cfKNN_df <- as.data.frame(as.table(cf_KNN))
+colnames(cfKNN_df) <- c("Predicted", "Reference", "Count")
+
+# Sum for the actual labels
+sums <- tapply(cfKNN_df$Count, cfKNN_df$Reference, sum)
+
+# Percentages
+cfKNN_df$Percentage <- cfKNN_df$Count / sums[cfKNN_df$Reference] * 100
+
+ggplot(cfKNN_df, aes(x = Reference, y = Predicted, fill = Percentage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), size = 3) +
+  scale_fill_gradient(low = "white", high = "forestgreen") +
+  theme_minimal() +
+  labs(x = "Actual", y = "Predicted", title = "Normalized Confusion Matrix")
+
+```
+
+Overall, the model exhibits higher accuracy in correctly predicting non-diabetes cases compared to diabetes cases.
+This observation suggests that the model might struggle with correctly identifying individuals with diabetes, resulting in a higher rate of false negatives.
+It is important to note that the model misclassified 3 individuals without diabetes as diabetic, which could pose challenges in clinical contexts where false diagnoses carry significant consequences, even though it is a small percentage.
+
+# 7. Trees
+
+Given the binary nature of the response variable, a classification tree was selected to explore the relationships between covariates and the presence or absence of diabetes.
+This approach is commonly employed when the association between covariates and the response exhibits non-linear patterns.
+
+```{r}
+tree.diabetes <- tree(train$diabetes ~. ,data= train ,method = 'gini')
+summary(tree.diabetes)
+```
+
+From the output it is evident that:
+
+-   the variables `HbA1c_level`, `blood_glucose_level` and `age` were identified as the most important factors in constructing the tree;
+
+-   the tree comprises a total of 6 terminal nodes;
+
+-   regarding model fit, the residual mean deviance is 0.2084, representing the mean of the squared residuals.
+
+-   the misclassification error reveals a high accuracy (0.97), indicating a favorable outcome.
+
+In the example, the classification tree is computed using the Gini criterion to evaluate which variables and splitting points are best for effectively separating observations into homogeneous groups with respect to the response variable `diabetes`.
+
+```{r, fig.cap="Classification Tree for Diabetes Prediction", fig.width=5, fig.height=4.8}
+plot(tree.diabetes,col='darkgray',lwd=2)
+text(tree.diabetes,pretty=0,col='blue',cex=0.6)
+```
+
+From the plot, it is evident that the variable `HbA1c_level` serves as the primary determinant for the initial split, suggesting its significant role in explaining the variability of the response compared to the other variables.
+
+Terminal nodes labeled as *1* indicate a majority of observations belonging to the diabetes class, while those labeled as *0* represent a majority in the non-diabetes class.
+These labels are determined by the mode of the output variable within each terminal node group.
+
+The final classification is depicted by the leaves which display probabilities of having diabetes.
+For instance, individuals with an HbA1c level exceeding 6.7 exhibit a probability of 1 of having diabetes.
+Similarly, for those with an HbA1c level below 6.7 and blood glucose level surpassing 210, the probability of having diabetes remains 1.
+
+```{r}
+# Logical scheme
+tree.diabetes
+```
+
+## 7.1 Pruning and Cross-Validation
+
+This section explores cross-validation techniques for pruning decision trees.
+Pruning serves to prevent overfitting by reducing tree complexity.
+Cross-validation assists in selecting the optimal tree size by evaluating its performance on various subsets of the data.
+To execute cross-validation, the dataset is partitioned into folds, with the default number of folds set to K=10.
+
+```{r}
+# Cross-Validation for optimal tree pruning
+cv.diabetes <- cv.tree(tree.diabetes, FUN=prune.misclass)
+
+names(cv.diabetes)
+cv.diabetes
+```
+
+The resulting cross-validation object, `cv.diabetes`, provides insights into the performance of the pruned tree across different levels.
+
+-   **size**: this vector denotes the sizes of the pruned trees, representing the number of terminal nodes.
+    For example, the sequence "6,3,2,1" indicates that trees with 6,3,2 and 1 terminal node(s) were evaluated.
+
+-   **dev**: each element in this vector corresponds to the residual deviance of the pruned trees.
+    Lower deviance values signify better model fit.
+    For instance, the corresponding residual deviance for these trees are 151, 151, 256 and 469, indicating their goodness of fit to the data.
+
+-   **k**: this vector provides the number of model parameters (k) for each pruned tree.
+    It helps in penalizing complex models during cross-validation.
+    The sequence includes values for different terminal node configurations, with *-Inf* indicating the unpruned tree.
+
+-   **method**: it indicates the method used for cross-validation, which in this case is *misclass*.
+
+-   **attr(,"class")**: itspecifies the class of the returned objects, indicating that the output belongs to both *prune* and *tree.sequence* classes.
+
+It is now made a comparison between cross-validation results using 10 folds and those using 100 folds to observe the impact of changing fold numbers on error rates.
+
+```{r fig.cap="CV Comparison", fig.width=4.5, fig.height=3.5}
+par(mfrow = c(1, 2))
+plot(cv.diabetes$size,cv.diabetes$dev,type="b", main = "C-V with 10 folds" ,xlab = "Tree size",ylab = "C-V error rate")
+min_error=min(cv.diabetes$dev)
+min_tree_size = min(cv.diabetes$size[cv.diabetes$dev == min_error])
+abline(v = min_tree_size, col = "red", lty = 2)
+
+cv.diabetes_100 = cv.tree(tree.diabetes, K = 100, FUN = prune.misclass)
+plot(cv.diabetes_100$size,cv.diabetes_100$dev,type="b", main = "C-V with 100 folds", xlab = "Tree size", ylab = "C-V error rate")
+min_error_100 = min(cv.diabetes_100$dev)
+min_tree_size_100 = min(cv.diabetes_100$size[cv.diabetes_100$dev == min_error_100])
+abline(v = min_tree_size_100, col = "red", lty = 2)
+```
+
+The plots reveal that the optimal tree size, selected through cross-validation, remains consistent at 3, regardless of whether 10-fold or 100-fold cross-validation was employed.
+Multiple iterations were conducted to ensure the stability of the outcome.
+
+## 7.2 Leave-One-Out Cross-Validation
+
+In this section, it is explored the application of the Leave-One-Out Cross-Validation (LOOCV) in the context of decision tree pruning to validate the results obtained from previous C-V iterations.
+LOOCV is a robust technique and it involves training the model on $n-1$ samples and evaluating it on the left-out sample, repeating this process for each observation.
+
+```{r message=FALSE, warning=FALSE, fig.cap="Leave-One-Out Cross-Validation", fig.width=4.5, fig.height=3.5}
+cv.diabetes_LOOCV <- cv.tree(tree.diabetes, K = 5000, FUN =prune.misclass) 
+
+plot(cv.diabetes_LOOCV$size,cv.diabetes_LOOCV$dev,type="b", main = "LOOCV", xlab = "Tree size", ylab = "C-V error rate")
+min_error_LOOCV=min(cv.diabetes_LOOCV$dev)
+min_tree_size_LOOCV = min(cv.diabetes_LOOCV$size[cv.diabetes_LOOCV$dev == min_error_LOOCV])
+abline(v = min_tree_size_100, col = "red", lty = 2)
+```
+
+The results of the previous C-V iterations and of the LOOCV coincide, showing that the optimal tree size is 3.
+
+After determining the optimal tree size, the classification tree is pruned to achieve the best number of terminal nodes using the *misclass* method.
+
+```{r}
+# Prune tree
+prune.diabetes <- prune.tree(tree.diabetes,best=3, method = "misclass")
+prune.diabetes
+```
+
+The displayed tree structure illustrates the hierarchical splits made by the classification prune tree algorithm to classify individuals as either diabetic (1) or non-diabetic (0).
+Each node represents a decision point based on a specific variable and threshold.
+Here is a breakdown of the interpretation:
+
+-   **Root Node (Node 1)**: initially, the dataset is partitioned at the root node, where 4500 observations are evaluated.
+    The predicted response indicates that 89.6% of cases belong to the non-diabetic class (0), while 10.4% belong to the diabetic class (1).
+
+-   **Node 2**: if the `HbA1c_level` variable is less than 6.7, the tree splits further into Node 2.
+    In this node 4287 observations are evaluated.
+    The predicted response shows that 94% of cases are non-diabetic (0), while 6% are diabetic (1).
+
+-   **Node 4**: for individuals with an `HbA1c_level` less than 6.7 and a `blood_glucose_level` less than 210, Node 4 is reached.
+    Here, 4182 observations are examined The predicted response indicates that 96.4% of cases are non-diabetic (0), while 3.6% are diabetic (1).
+    This node is a terminal node denoted by an asterisk (\*), indicating no further splitting.
+
+-   **Node 5**: individuals with an `HbA1c_level` less than 6.7 and a blood glucose level greater than 210 are classified directly as diabetic (1) with a probability of 1.
+    This is another terminal node, denoted by an asterisk (\*).
+
+-   **Node 3**: if the `HbA1c_level` is greater than 6.7, all individuals are classified as diabetic (1) with a probability of 1.
+    This, too, is a terminal node denoted by an asterisk (\*).
+
+It is now plotted the pruned tree to visualize the hierarchical splits made by the classification prune tree algorithm.
+
+```{r, fig.cap="Pruned tree plot", fig.width=4.5, fig.height=3.5}
+plot(prune.diabetes,col='darkgray',lwd=2)
+text(prune.diabetes,pretty=0,col='blue',font=2)
+```
+
+## 7.3 Tree Predictions
+
+```{r}
+tree_pred = predict(prune.diabetes, test, type = "class")
+confusion_matrix_tree= confusionMatrix(data=tree_pred,test$diabetes)
+print(confusion_matrix_tree)
+```
+
+The model achieves an accuracy of 97.2%, indicating proficiency in classifying the absence/presence of diabetes in individuals.
+The proportion of actual non-diabetes cases that were correctly identified is 100%, none of the non-diabetes cases were incorrectly identified as diabetes cases.
+Additionally, the proportion of actual diabetes cases that were correctly identified is around 70.8.
+
+It is now created a heatmap in order to visualize and better understand the previous results.
+
+```{r, fig.cap="Heatmap of Predicted Values vs Actual Values - prune tree", fig.width=4.5, fig.height=3.5}
+confusion_tree_df <- as.data.frame(as.table(confusion_matrix_tree))
+colnames(confusion_tree_df) <- c("Predicted", "Reference", "Count")
+
+# Sum for the actual labels
+sums <- tapply(confusion_tree_df$Count, confusion_tree_df$Reference, sum)
+
+# Percentages
+confusion_tree_df$Percentage <- confusion_tree_df$Count / sums[confusion_tree_df$Reference] * 100
+
+ggplot(confusion_tree_df, aes(x = Reference, y = Predicted, fill = Percentage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), size = 3) +
+  scale_fill_gradient(low = "white", high = "purple") +
+  theme_minimal() +
+  labs(x = "Actual", y = "Predicted", title = "Normalized Confusion Matrix")
+
+```
+
+Overall, the model demonstrates higher accuracy in correctly predicting non-diabetes cases compared to diabetes cases.
+Specifically, all non-diabetes cases were correctly classified.
+However, the proportion of correctly classified diabetes cases remains quite high at 70.8%, considering also that the dataset is unbalanced.
+
+# 8. Bagging
+
+It is now performed the Bagging (Boostrap Aggregating) technique using the *randomForest()* function considering all the covariates (`mtry = 8`) and employing a total of 1000 Bootstrap samples.
+This technique applies principles from the Bootstrap method and aims to produce more robust tree models by generating multiple bootstrapped datasets and training individual trees on each of them.
+
+The Bagging process is made of three main steps:
+
+-   **Bootstrap Samples**: generate $B$ Bootstrap samples by randomly sampling $N$ observations with replacement from the original dataset.
+
+-   **Model Fitting**: fit a base model on each bootstrap sample: $\hat{f}^{*1}(\textbf{x}), \hat{f}^{*2}(\textbf{x}), \dots,\hat{f}^{*B}(\textbf{x})$.
+
+-   **Aggregation**: Combine the predictions from all base models using a suitable aggregation method.
+    In the case of classification is performed the sum of the predictions of each model for each class, and the one with the highest sum is selected: $\hat{f}_{bag}(x)=\text{arg max}_j\sum\limits_{b=1}^{B}I(f^{*b}(\textbf{x})=j)$.
+
+```{r warning=FALSE}
+bag_diabetes = randomForest(diabetes ~ ., data = train, mtry = 8, importance = TRUE,
+                            ntree = 1000, type="classification")
+bag_diabetes
+```
+
+From the obtained results, the OOB error rate reflects the average misclassification rate of observations that were excluded from the bootstrap sample used to train each individual tree.
+With an OOB error rate of 3.64%, the model demonstrates strong performance, indicating its ability to effectively capture underlying data patterns and make precise predictions on unseen instances.
+
+## 8.1 Bagging predictions
+
+Next, predictions obtained through the Bagging technique will be examined in order to allow for evaluating the model's performance and its predictive capability on unseen data.
+
+```{r}
+predictions_bag = predict(bag_diabetes, newdata = test)
+```
+
+```{r}
+confusion_matrix_bag= confusionMatrix(data=predictions_bag, test$diabetes)
+print(confusion_matrix_bag)
+```
+
+The model achieves an accuracy of 97%, indicating proficiency in classifying the absence/presence of diabetes in individuals.
+The proportion of actual non-diabetes cases that were correctly identified is around 99%.
+It is important to note that the model misclassified 4 individuals without diabetes as diabetic, which could pose challenges in clinical contexts where false diagnoses carry significant consequences, even though it is a small percentage.
+Additionally, the proportion of actual diabetes cases that were correctly identified is 77%.
+
+It is now created a heatmap in order to visualize and better understand the previous results.
+
+```{r, fig.cap="Heatmap of Predicted Values vs Actual Values - Bagging", fig.width=4.5, fig.height=3.5}
+cfbag_df <- as.data.frame(as.table(confusion_matrix_bag))
+colnames(cfbag_df) <- c("Predicted", "Reference", "Count")
+
+# Sum for the actual labels
+sums <- tapply(cfbag_df$Count, cfbag_df$Reference, sum)
+
+# Percentages
+cfbag_df$Percentage <- cfbag_df$Count / sums[cfbag_df$Reference] * 100
+
+ggplot(cfbag_df, aes(x = Reference, y = Predicted, fill = Percentage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), size = 3) +
+  scale_fill_gradient(low = "white", high = "darkorange") +
+  theme_minimal() +
+  labs(x = "Actual", y = "Predicted", title = "Normalized Confusion Matrix")
+
+```
+
+Overall, the model demonstrates higher accuracy in correctly predicting non-diabetes cases compared to diabetes cases.
+Specifically, just 4 of non-diabetes cases out of 452 (0.9%) were incorrectly classified as diabetes-cases.
+However, the proportion of correctly classified diabetes cases remains high at 77.1%, considering also that the dataset is unbalanced.
+
+# 9. Random Forest
+
+It is now trained a Random Forest model with the aim of optimizing the selection of variables considered at each split of the classification trees.
+This technique allows to add variability to the trees generated in different runs, in order to decorrelate them.
+Furthermore, instead of evaluating different values of `mtry`, it will be selected the exact number of covariates to be considered at each split.
+Throughout this process, are utilized both Out-of-Bag (OOB) error estimation and Cross-Validation to determine the optimal number of covariates to select.
+Subsequently, the model will be fitted using the chosen `mtry` value to assess its performance.
+
+The Random Forest process is made by the same steps of the Bagging process but unlike Bagging, where predictions are aggregated through majority voting, in Random Forest predictions are aggregated by averaging the outputs of all trees: $\hat{f}_{bag}(x)=\frac{1}{B}\sum\limits_{b=1}^{B}f^{*b}(\textbf{x})$.
+
+This approach helps to reduce the variance of the model and provides a more stable prediction by leveraging the collective wisdom of multiple trees trained on different subsets of the data.
+
+```{r, fig.cap= "Variables Importance", fig.width=4.5, fig.height=3.5}
+mtry.explore = 1:8  
+oob.err = double(length(mtry.explore))
+nfolds = 10
+folds = sample(1:nfolds, nrow(train), replace = TRUE)
+cv.error = matrix(ncol = length(mtry.explore), nrow = nfolds)
+
+for(mtry in 1:length(mtry.explore)) {
+  rf = randomForest(diabetes ~ . , data = train, mtry = mtry.explore[mtry], ntree = 400, type = "classification")
+  oob.err[mtry] = rf$err.rate[nrow(rf$err.rate), "OOB"]
+  
+  for(j in 1:nfolds){
+    rf = randomForest(diabetes ~ . , data = train[-which(folds == j), ], mtry = mtry.explore[mtry], ntree = 400, type = "classification")
+    pred = predict(rf, train[which(folds == j), ], type = "response")
+    cv.error[j, mtry] = mean(pred != train$diabetes[which(folds == j)])
+  }
+  
+  cat(mtry, " ")
+}
+
+test.err = apply(cv.error, 2, mean)
+
+importance(rf)
+varImpPlot(rf)
+
+matplot(1:length(mtry.explore) , cbind(oob.err, test.err), pch = 19 , col = c("red", "blue"),
+        type = "b", main = "OOB Error and CV Error", ylab = "Error Rate", xlab = "Number of Predictors Considered at each split")
+legend("topright", legend = c("Out of Bag Error", "CV Error"), pch = 19, col = c("red", "blue"))
+
+min_cv_error <- min(oob.err)
+min_mtry <- which.min(oob.err)
+
+abline(v = min_mtry, col = "green", lwd = 2)
+
+
+```
+
+The results obtained from the *importance()* and *varImpPlot()* functions applied to the Random Forest model indicate that `HbA1c_level` and `blood_glucose_level` are the most influential variables in predicting the outcome.
+`HbA1c_level` exhibits the highest importance score of 358.815, followed closely by `blood_glucose_level` with a score of 212.597.
+
+Observing the plot containing the Out-of-Bag (OOB) error and Cross-Validation (CV) error, a noticeable decline in error occurs at the level of the second variable, followed by a subsequent increase.
+In this case the observed pattern indicates that, as obtained from classification tree, the optimal choice for the number of covariates is two.
+
+```{r}
+rf.2 = randomForest(diabetes ~ . , data = train, mtry = 2, ntree = 5000, type = "classification") 
+```
+
+## 9.1 Random Forest predictions
+
+Now the analysis will delve into the predictions generated by the Random Forest technique to evaluate the model's performance and predictive accuracy on unseen data.
+
+```{r}
+pred_rf = predict(rf.2, newdata = test)
+confusion_matrix_rf = confusionMatrix(data=pred_rf, test$diabetes)
+print(confusion_matrix_rf)
+```
+
+The model achieves an accuracy of 96.8%, indicating proficiency in classifying the absence/presence of diabetes in individuals.
+The proportion of actual non-diabetes cases that were correctly identified is 99.6%.
+It is important to note that the model misclassified 2 individuals without diabetes as diabetic, which could pose challenges in clinical contexts where false diagnoses carry significant consequences, even though it is a small percentage.
+Additionally, the proportion of actual diabetes cases that were correctly identified is 70.8%.
+
+It is now created a heatmap in order to visualize and better understand the previous results.
+
+```{r, fig.cap="Heatmap of Predicted Values vs Actual Values - Random Forest", fig.width=4.5, fig.height=3.5}
+cfrf_df <- as.data.frame(as.table(confusion_matrix_rf))
+colnames(cfrf_df) <- c("Predicted", "Reference", "Count")
+
+# Sum for the actual labels
+sums <- tapply(cfrf_df$Count, cfrf_df$Reference, sum)
+
+# Percentages
+cfrf_df$Percentage <- cfrf_df$Count / sums[cfrf_df$Reference] * 100
+
+ggplot(cfrf_df, aes(x = Reference, y = Predicted, fill = Percentage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), size = 3) +
+  scale_fill_gradient(low = "white", high = "lightgreen") +
+  theme_minimal() +
+  labs(x = "Actual", y = "Predicted", title = "Normalized Confusion Matrix")
+
+```
+
+Overall, the model demonstrates higher accuracy in correctly predicting non-diabetes cases compared to diabetes cases.
+Specifically, all non-diabetes cases were correctly classified.
+However, the proportion of correctly classified diabetes cases remains high at 70.8%, considering also that the dataset is unbalanced.
+
+# 10. Models comparison
+
+Are now visualized the performance metrics of the six distinct models applied to the diabetes dataset.
+The evaluation focuses on accuracy, sensitivity, and specificity, providing insights into their predictive capabilities for identifying diabetic individuals.
+
+```{r, fig.cap="Final results table"}
+models <- c("Logit", "SVM", "KNN", "Trees", "Bagging", "Random Forest")
+accuracy <- c(0.942, 0.966, 0.96, 0.972, 0.97, 0.968)
+sensitivity <- c(0.9757, 0.9934, 0.9934, 0.9912, 1.00, 0.9956)
+specificity <- c(0.6250, 0.7021, 0.6383, 0.7083, 0.7708, 0.7083)
+
+results <- data.frame(Model = models, Accuracy = accuracy, Sensitivity = sensitivity, Specificity = specificity)
+
+kable(results)
+
+results_long <- pivot_longer(results, cols = c(Accuracy, Sensitivity, Specificity), names_to = "Metric", values_to = "Value")
+
+ggplot(results_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = round(Value, 2)), position = position_dodge(width = 0.95), vjust = -0.1) +
+  labs(title = "Model Evaluation Metrics",
+       x = "Model",
+       y = "Value") +
+  scale_fill_manual(values = c("Accuracy" = "#92c5de", "Sensitivity" = "#f4cae4", "Specificity" = "#b3e2cd")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The evaluation of six distinct models on the diabetes dataset provides valuable insights into their performance metrics.
+Across all models, consistent accuracy, sensitivity and specificity results were observed, indicating robust performance in predicting diabetes.
+
+Despite the satisfactory overall accuracy observed in all models, further analysis of the confusion matrix revealed certain limitations.
+Notably, in all models, there was a challenge in accurately predicting instances of diabetic individuals (class 1), as reflected in the sensitivity scores.
+It is worth considering that the challenge in accurately predicting instances of diabetic individuals (class 1) may be influenced by the fact that the dataset is unbalanced, resulting in a smaller number of observations for diabetic instances compared to non-diabetic ones (class 0).
+To address this issue, various models were developed with different configurations, aiming to improve the sensitivity while maintaining overall accuracy.
+However, despite the adjustments made in the models, including incorporating different features or utilizing ensemble techniques like Bagging and Random Forest, the sensitivity scores remained relatively consistent.
+
+In overall examination of the performance metrics, the **Bagging**, the **Trees** and the **SVM** models emerged as the most promising options.
+The three models demonstrated commendable accuracy and specificity while maintaining competitive sensitivity scores.
+These findings suggest that further exploration and refinement of these models could lead to improved predictive capabilities for diabetic classification.
+
